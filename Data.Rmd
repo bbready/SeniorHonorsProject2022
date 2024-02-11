@@ -1,0 +1,139 @@
+---
+title: "Data"
+author: "Brenden Bready"
+date: "2/9/2022"
+output:
+  word_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE}
+library(rvest)
+library(tidyverse)
+```
+
+
+```{r}
+url <- "https://www.transfermarkt.us/premier-league/gesamtspielplan/wettbewerb/GB1/saison_id/2021"
+# file <- read_html(url)
+```
+
+
+
+```{r}
+tables <- url %>% 
+  read_html() %>%
+  html_table(fill = TRUE)
+tables <- tables[4:length(tables)]
+```
+
+```{r}
+tableone <- tables[[1]]
+```
+
+
+```{r}
+clean_tables <- function(first_table){
+    names(first_table) <- c("date", "2", "home", "4", "result", "6", "away", "8", "9", "10", "11")
+    first_table <- first_table %>%
+        select(-c(2, 4, 6, 8, 9, 10, 11))
+    first_table <- suppressWarnings(first_table %>%
+                                        filter(., substr(result, 1, 1) == "-" | substr(home, 1, 1) == "(") %>%
+                                        separate(., result, into = c("home_score", "away_score"), sep = ":") %>%
+                                        separate(., date, into = c("time", "day"), sep = "\t\t\t\t\t\t\t\t\t\t", fill = "right") %>%
+                                        select(-time) %>%
+                                        fill(., day, dir("down")) %>%
+                                        separate(., home, into = c("home_position", "home_team"), sep = "\\)") %>%
+                                        separate(., away, into = c("away_team", "away_position"), sep = "\\("))
+    if(is.na(first_table$home_team[1])){
+        first_table <- first_table %>%
+            rename(., home_team = home_position, home_position = home_team)
+    }
+    first_table <- first_table[, c("day", "home_team", "home_position", "home_score", "away_score", "away_team", "away_position")]
+    first_table <- first_table %>%
+        select(-c(home_position, away_position))
+    first_table <- suppressWarnings(first_table %>%
+                                        mutate(home_team = str_trim(home_team, "both"), away_team = str_trim(away_team, "both"), home_score = as.numeric(home_score), away_score = as.numeric(away_score), day = str_trim(day, "both")) %>%
+                                        mutate(., day = as.Date(day, "%m/%d/%y")) %>%
+                                        rename(., Date = day, 'Home team' = home_team, 'Away team' = away_team, 'Home score' = home_score, 'Away score' = away_score))
+    return(first_table)
+}
+```
+
+```{r}
+finished_table <- function(tables){
+  full_table <- data.frame(matrix(nrow = 0, ncol = 7))
+  for (x in 1:length(tables)){
+    temp_table <- tables[[x]]
+    full_table <- rbind(full_table, clean_tables(temp_table))
+  }
+  return(full_table)
+}
+```
+
+```{r}
+full_table <- finished_table(tables)
+```
+
+```{r}
+write.csv(full_table, file = "data.csv", row.names = FALSE)
+```
+
+Change blanks to NA in date column, then fill, then separate (possibly parse date?)
+
+# Two piece error coming from date column (missing days)
+
+```{r}
+table_one <- clean_tables(tables[[1]])
+```
+
+
+
+think ab recreating standings in a table
+track things like average goals scored, allowed, etc (put into standings table)
+build function using complete data, then try to mid season
+begin write up
+
+to do:
+fix errors
+begin writing
+standings table
+
+
+```{r}
+url2 <- "https://www.transfermarkt.us/wettbewerbe/europa"
+file2 <- read_html(url2)
+tables2 <- file2 %>% html_table(fill = TRUE)
+leagues <- tables2[[1]]
+```
+
+```{r}
+get_leagues <- function(leagues){
+  leagues <- leagues %>%
+    select(competition) %>%
+    filter(row_number() %% 2 == 0) %>%
+    mutate(., competition = tolower(competition)) %>%
+    mutate(., competition = str_replace_all(competition, "[\\s\\.]", "-"))
+  leagues$competition[23] = "nemzeti-bajnoksag"
+  leagues$competition[8] = "super-lig"
+country_code <- c("GB1", "ES1", "IT1", "L1", "FR1", "PO1", "RU1", "TR1", "NL1", "BE1", "UKR1", "A1", "GR1", "SC1", "C1", "KR1", "PL1", "TS1", "DK1", "SER1", "RO1", "SE1", "UNG1", "NO1", "ZYP1")
+country <- c("England", "Spain", "Italy", "Germany", "France", "Portugal", "Russia", "Turkey", "Netherlands", "Belgium", "Ukraine", "Austria", "Greece", "Scotland", "Switzerland", "Croatia", "Poland", "Czech Republic", "Denmark", "Serbia", "Romania", "Sweden", "Hungary", "Norway", "Cyprus")
+return(cbind(leagues, country, country_code))
+}
+write.csv(get_leagues(leagues), file = "country_options.csv", row.names = FALSE)
+```
+
+```{r}
+test <- get_leagues(leagues)
+```
+
+```{r}
+test$competition[which(test$country == "Germany")]
+```
+
+
+
+

@@ -1,0 +1,182 @@
+---
+title: "RPI"
+author: "Brenden Bready"
+date: "3/8/2022"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+data <- read_csv("data.csv", show_col_types = FALSE)
+```
+
+```{r}
+home_points <- data %>%
+    group_by(home_team) %>%
+    mutate(points = ifelse(home_score > away_score, 3, ifelse(home_score ==    away_score, 1, 0)))  %>%
+    summarise(home_points = sum(points, na.rm=TRUE), home_games = sum(!is.na(points)))
+away_points <- data %>%
+    group_by(away_team) %>%
+    mutate(points = ifelse(away_score > home_score, 3, ifelse(away_score == home_score, 1, 0))) %>%
+    summarise(away_points = sum(points, na.rm=TRUE), away_games = sum(!is.na(points)))
+teams_ppg <- cbind(home_points, away_points) %>%
+  select(-c(away_team)) %>%
+  rename(team = home_team) %>%
+  mutate(ppg = (home_points+away_points)/(home_games+away_games))
+```
+
+```{r}
+data <- data %>%
+        rename(team = home_team, opponent = away_team, team_score = home_score, opp_score = away_score) %>%
+        select(-c(home_position, away_position))
+data2 <- data %>%
+        rename(team = opponent, opponent = team, team_score = opp_score, opp_score = team_score)
+double_table <- bind_rows(data, data2)
+```
+
+
+join above chunk to full games data file
+
+ex for arsenal
+have arsenal ppg
+then get the average ppg for all teams arsenal plays from big dataset
+then get average ppg for oponents of the teams that arsenal has played
+assign weights to these values and average
+
+
+
+
+
+
+
+Try a different approach here
+Ignore and home and away and make a dataset double the length, just having a team column and opponent column
+then do averages way easier
+
+
+```{r}
+ppg1 <- left_join(double_table, teams_ppg, by = "team") %>%
+  select(-c(home_points, away_points, home_games, away_games)) %>%
+  rename(team_ppg = ppg)
+ppg2 <- left_join(double_table, teams_ppg, by = c("opponent" = "team")) %>%
+  select(-c(home_points, away_points, home_games, away_games)) %>%
+  rename(opp_ppg = ppg)
+full_ppg <- left_join(ppg1, ppg2)
+```
+
+```{r}
+opp_ppg <- full_ppg %>%
+  group_by(team) %>%
+  mutate(avg_opp_ppg = mean(opp_ppg)) %>%
+  distinct(team, .keep_all = T) %>%
+  select(c(team, avg_opp_ppg))
+```
+
+```{r}
+new_teams_ppg <- left_join(teams_ppg, opp_ppg, by = c("team"))
+```
+
+```{r}
+ppg4 <- left_join(double_table, new_teams_ppg, by = c("opponent" = "team")) %>%
+  select(-c(home_points, away_points, home_games, away_games)) %>%
+  rename(opp_ppg = ppg)
+```
+
+```{r}
+new_opp_ppg <- ppg4 %>%
+  group_by(team) %>%
+  mutate(avg_opp_opp_ppg = mean(avg_opp_ppg)) %>%
+  distinct(team, .keep_all = T) %>%
+  select(c(team, avg_opp_opp_ppg))
+```
+
+```{r}
+full_teams_ppg <- left_join(new_teams_ppg, new_opp_ppg, by = c("team")) %>%
+  mutate(rpi = (ppg*(1/3)+avg_opp_ppg*(1/3)+avg_opp_opp_ppg*(1/3))) %>%
+  arrange(desc(rpi))
+```
+
+full function
+
+```{r}
+rpi <- function(data, w1=(1/4), w2=(1/2), w3=(1/4)){
+    data <- data %>%
+        filter(!is.na(home_score & away_score))
+    home_points <- data %>%
+        group_by(home_team) %>%
+        mutate(points = ifelse(home_score > away_score, 3, ifelse(home_score ==    away_score, 1, 0)))  %>%
+        summarise(home_points = sum(points, na.rm=TRUE), home_games = sum(!is.na(points)))
+    away_points <- data %>%
+        group_by(away_team) %>%
+        mutate(points = ifelse(away_score > home_score, 3, ifelse(away_score == home_score, 1, 0))) %>%
+        summarise(away_points = sum(points, na.rm=TRUE), away_games = sum(!is.na(points)))
+    teams_ppg <- cbind(home_points, away_points) %>%
+        select(-c(away_team)) %>%
+        rename(team = home_team) %>%
+        mutate(ppg = (home_points+away_points)/(home_games+away_games))
+    data <- data %>%
+        rename(team = home_team, opponent = away_team, team_score = home_score, opp_score = away_score)
+    data2 <- data %>%
+        rename(team = opponent, opponent = team, team_score = opp_score, opp_score = team_score)
+    double_table <- bind_rows(data, data2)
+    ppg1 <- left_join(double_table, teams_ppg, by = c("opponent" = "team")) %>%
+        select(-c(home_points, away_points, home_games, away_games)) %>%
+        rename(opp_ppg = ppg)
+    opp_ppg <- ppg1 %>%
+        group_by(team) %>%
+        mutate(avg_opp_ppg = mean(opp_ppg)) %>%
+        distinct(team, .keep_all = T) %>%
+        select(c(team, avg_opp_ppg))
+    new_teams_ppg <- left_join(teams_ppg, opp_ppg, by = c("team"))
+    ppg2 <- left_join(double_table, new_teams_ppg, by = c("opponent" = "team")) %>%
+        select(-c(home_points, away_points, home_games, away_games)) %>%
+        rename(opp_ppg = ppg)
+    new_opp_ppg <- ppg2 %>%
+        group_by(team) %>%
+        mutate(avg_opp_opp_ppg = mean(avg_opp_ppg)) %>%
+        distinct(team, .keep_all = T) %>%
+        select(c(team, avg_opp_opp_ppg))
+    full_teams_ppg <- left_join(new_teams_ppg, new_opp_ppg, by = c("team")) %>%
+        mutate(rpi = (ppg*w1+avg_opp_ppg*w2+avg_opp_opp_ppg*w3)) %>%
+        arrange(desc(rpi)) %>%
+        select(c(team, rpi, ppg, avg_opp_ppg, avg_opp_opp_ppg, home_points, home_games, away_points, away_games)) %>%
+        rename(Team = team, RPI = rpi, 'Points per game (PPG)' = ppg, 'Opponent\'s PPG' = avg_opp_ppg, 'Opponent\'s Opponent\'s PPG' = avg_opp_opp_ppg, 
+               'Home points' = home_points, 'Home games' = home_games, 'Away points' = away_points, 'Away games' = away_games) %>%
+        mutate_if(is.numeric, round, digits=2)
+    return(full_teams_ppg)
+}
+```
+
+
+```{r}
+rpi(data)
+```
+
+Add function to shiny app in new tab
+rearrange order
+
+make double games into a function to help with poisson - do something
+
+add poisson markdown with estimates and exponential
+
+```{r}
+mod1 <- glm(team_score ~ team + opponent, data = double_table, family = poisson)
+summary(mod1)
+```
+
+```{r}
+exp(0.36-0.16+.25)
+exp(0.36-0.38+.16)
+```
+
+
+
+
+
+
+
+
+

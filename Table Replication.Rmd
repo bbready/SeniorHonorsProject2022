@@ -1,0 +1,63 @@
+---
+title: "Table Replication"
+author: "Brenden Bready"
+date: "2/15/2022"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+data <- read_csv("data.csv")
+```
+
+
+```{r}
+# full function
+standings_func <- function(data){
+    home_goals <- data %>%
+        group_by(home_team) %>%
+        summarise(home_goals_for = sum(home_score, na.rm=TRUE), home_goals_against = sum(away_score, na.rm=TRUE))
+    away_goals <- data %>%
+        group_by(away_team) %>%
+        summarise(away_goals_for = sum(away_score, na.rm=TRUE), away_goals_against = sum(home_score, na.rm=TRUE))
+    total_goals <- cbind(home_goals, away_goals) %>%
+        select(-c(away_team)) %>%
+        rename(team = home_team) %>%
+        mutate(goals_scored = (home_goals_for + away_goals_for), goals_conceded = (home_goals_against +   away_goals_against), goal_differential = goals_scored - goals_conceded)
+    home_points <- data %>%
+        group_by(home_team) %>%
+        mutate(points = ifelse(home_score > away_score, 3, ifelse(home_score == away_score, 1, 0))) %>%
+        summarise(home_points = sum(points, na.rm=TRUE), home_wins = sum(points == 3, na.rm = TRUE), home_ties = sum(points == 1, na.rm = TRUE), home_losses = sum(points == 0, na.rm = TRUE))
+    away_points <- data %>%
+        group_by(away_team) %>%
+        mutate(points = ifelse(away_score > home_score, 3, ifelse(away_score == home_score, 1, 0))) %>%
+        summarise(away_points = sum(points, na.rm=TRUE), away_wins = sum(points == 3, na.rm = TRUE), away_ties = sum(points == 1, na.rm = TRUE), away_losses = sum(points == 0, na.rm = TRUE))
+    total_points <- cbind(home_points, away_points) %>%
+        select(-c(away_team)) %>%
+        rename(team = home_team) %>%
+        mutate(points = home_points + away_points, wins = home_wins + away_wins, ties = home_ties + away_ties, losses = home_losses + away_losses, record = paste(wins, losses, ties, sep = "-"))
+    standings <- cbind(total_goals, total_points) %>%
+        select(-c(9)) %>%
+        arrange(desc(points), desc(goal_differential)) %>%
+        select(team, points, goal_differential, goals_scored, goals_conceded, wins, losses, ties, record)
+    return(standings)
+}
+```
+
+```{r}
+standings_func(data)
+```
+
+
+standings into a function with data file as input
+ui side - select league / year
+server side
+
+
+na in mutate for scores (figure out how to ignore) - done
+teams average points per game
+then opponents points per game
+
+
+
+

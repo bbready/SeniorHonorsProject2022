@@ -1,0 +1,162 @@
+---
+title: "Forecasting"
+author: "Brenden Bready"
+date: "4/25/2022"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+data <- read_csv("data.csv", show_col_types = FALSE)
+```
+
+```{r}
+poissonFunc <- function(games){
+    model <- glm(team_score ~ team + opponent + Location, data = games, family = poisson)
+    original <- data.frame(x = model$coefficients, rating = exp(model$coefficients))
+    original$team <- rownames(original)
+    row.names(original) <- NULL
+    original <- original %>%
+        select(team, x, rating)
+    defAVG <- (original %>%
+                   filter(str_detect(team, "opponent") == TRUE) %>%
+                   summarise(sum(x)/(n()+1)))[1,1]
+    offAVG <- (original %>%
+                   filter(str_detect(team, "team") == TRUE) %>%
+                   summarise(sum(x)/(n()+1)))[1,1]
+    intercept <- (original$x)[1]
+    homeAdj <- original$rating[length(original$rating)]
+    adjusted <- data.frame(team = unique(games$team))
+    adjusted <- data.frame(team = adjusted[order(adjusted$team),])
+    adjusted$Off = append(0, original$x[2:(length(original$x)/2)])
+    adjusted$Def = append(0, original$x[(length(original$x)/2+1):(length(original$x)-1)])
+    adjusted$OffAdj = adjusted$Off+defAVG+intercept
+    adjusted$DefAdj = adjusted$Def+offAVG+intercept
+    adjusted$expOff = exp(adjusted$Off+defAVG+intercept)
+    adjusted$expDef = exp(adjusted$Def+offAVG+intercept)
+    avgPoisOffCoef <- mean(adjusted$OffAdj)
+    avgPoisDefCoef <- mean(adjusted$DefAdj)
+    avgPoisCoef <- exp((avgPoisDefCoef+avgPoisOffCoef)/2)
+    scoreRate <- mean(games$team_score)
+    C = scoreRate/avgPoisCoef
+    poissonOFFavg = mean(adjusted$expOff)
+    poissonDEFavg = mean(adjusted$expDef)
+    D = sqrt(C*(poissonDEFavg/poissonOFFavg))
+    adjusted$newOffExp = adjusted$expOff*D 
+    adjusted$newDefExp = adjusted$expDef*(C/D)
+    returnedTable <- adjusted %>%
+        mutate(OffRating = newOffExp, DefRating = newDefExp, OverallRating = newOffExp/newDefExp) %>%
+        select(team, OffRating, DefRating, OverallRating) %>%
+        arrange(desc(OffRating))
+    returnedTable$OffRank = 1:nrow(returnedTable)
+    returnedTable <- returnedTable %>%
+        arrange(DefRating)
+    returnedTable$DefRank = 1:nrow(returnedTable)
+    returnedTable <- returnedTable %>%
+        arrange(desc(OverallRating)) %>%
+        mutate_if(is.numeric, round, digits=2) %>%
+        select(team, OverallRating, OffRating, OffRank, DefRating, DefRank)
+    avgOffRating <- mean(returnedTable$OffRating)
+    return(list(returnedTable, homeAdj, avgOffRating))
+}
+```
+
+
+```{r}
+doubleTableFunc <- function(games){
+    data <- games %>%
+        filter(!is.na(home_score & away_score))
+    home_points <- data %>%
+        group_by(home_team) %>%
+        mutate(points = ifelse(home_score > away_score, 3, ifelse(home_score ==    away_score, 1, 0)))  %>%
+        summarise(home_points = sum(points, na.rm=TRUE), home_games = sum(!is.na(points)))
+    away_points <- data %>%
+        group_by(away_team) %>%
+        mutate(points = ifelse(away_score > home_score, 3, ifelse(away_score == home_score, 1, 0))) %>%
+        summarise(away_points = sum(points, na.rm=TRUE), away_games = sum(!is.na(points)))
+    teams_ppg <- cbind(home_points, away_points) %>%
+        select(-c(away_team)) %>%
+        rename(team = home_team) %>%
+        mutate(ppg = (home_points+away_points)/(home_games+away_games))
+    data <- data %>%
+        rename(team = home_team, opponent = away_team, team_score = home_score, opp_score = away_score)
+    data2 <- data %>%
+        rename(team = opponent, opponent = team, team_score = opp_score, opp_score = team_score)
+    double_table <- bind_rows(data, data2)
+    double_table$Location = NA
+    double_table$Location[0:length(double_table$date)/2] = 1
+    double_table[is.na(double_table)] = -1
+    return(double_table)
+}
+```
+
+```{r}
+data <- data %>%
+  select(-c(home_position, away_position))
+```
+
+
+
+```{r}
+BIFATable <- poissonFunc(doubleTableFunc(data))[[1]]
+HomeAdj <- poissonFunc(doubleTableFunc(data))[[2]]
+AvgOffRating <- poissonFunc(doubleTableFunc(data))[[3]]
+```
+
+
+```{r}
+firstMerge <- merge(data, BIFATable, by.x = "home_team", by.y = "team") %>%
+  select(-c(OverallRating, OffRank, DefRank)) %>%
+  rename(home_offRating = OffRating, home_defRating = DefRating)
+```
+
+```{r}
+predictions <- merge(firstMerge, BIFATable, by.x = "away_team", by.y = "team") %>%
+  select(-c(OverallRating, OffRank, DefRank)) %>%
+  rename(away_offRating = OffRating, away_defRating = DefRating)
+```
+
+```{r}
+predictions$home_expGoals = (predictions$home_offRating*predictions$away_defRating*HomeAdj)/AvgOffRating
+predictions$away_expGoals = (predictions$away_offRating*predictions$home_defRating)/(AvgOffRating*HomeAdj)
+```
+
+```{r}
+predictions <- predictions %>%
+  select(-c(home_offRating, home_defRating, away_offRating, away_defRating))
+```
+
+```{r}
+forecastedTable <- left_join(data, predictions, by = c("date", "home_team", "home_score", "away_score", "away_team"))
+```
+
+
+```{r}
+forecastFunc <- function(data, BIFATable, HomeAdj, AvgOffRating){
+  firstMerge <- merge(data, BIFATable, by.x = "home_team", by.y = "team") %>%
+    select(-c(OverallRating, OffRank, DefRank)) %>%
+    rename(home_offRating = OffRating, home_defRating = DefRating)
+  predictions <- merge(firstMerge, BIFATable, by.x = "away_team", by.y = "team") %>%
+    select(-c(OverallRating, OffRank, DefRank)) %>%
+    rename(away_offRating = OffRating, away_defRating = DefRating)
+  predictions$home_expGoals = round((predictions$home_offRating*predictions$away_defRating*HomeAdj)/AvgOffRating, digits = 2)
+  predictions$away_expGoals = round((predictions$away_offRating*predictions$home_defRating)/(AvgOffRating*HomeAdj), digits = 2)
+  predictions <- predictions %>%
+    select(-c(home_offRating, home_defRating, away_offRating, away_defRating))
+  forecastedTable <- left_join(data, predictions, by = c("date", "home_team", "home_score", "away_score", "away_team"))
+  return(forecastedTable)
+}
+```
+
+```{r}
+forecastFunc(data, BIFATable, HomeAdj, AvgOffRating)
+```
+
+
+
+
+
+

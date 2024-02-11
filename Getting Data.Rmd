@@ -1,0 +1,81 @@
+---
+title: "Data"
+author: "Brenden Bready"
+date: "1/31/2022"
+output: html_document
+---
+
+
+
+```{r}
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(tidyverse)
+```
+
+```{r}
+url <- "https://www.transfermarkt.us/premier-league/gesamtspielplan/wettbewerb/GB1/saison_id/2021"
+file <- read_html(url)
+```
+
+```{r}
+tables <- file %>% html_table(fill = TRUE)
+tables <- tables[4:length(tables)]
+```
+
+```{r}
+organize_table <- function(first_table){
+  names(first_table) <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+first_table <- first_table %>%
+  select(-c(2, 4, 6, 8, 9, 10, 11))
+names(first_table) <- c("date", "home", "result", "away")
+first_table <- first_table %>%
+  filter(., substr(result, 1, 1) == "-" | substr(home, 1, 1) == "(") %>%
+  separate(., result, into = c("home_score", "away_score"), sep = ":") %>%
+  separate(., date, into = c("time", "day"), sep = "\t\t\t\t\t\t\t\t\t\t") %>%
+  select(-time) %>%
+  fill(., day, dir("down")) %>%
+  separate(., home, into = c("home_position", "home_team"), sep = "\\)") %>%
+  separate(., away, into = c("away_team", "away_position"), sep = "\\(")
+if(is.na(first_table$home_team)){
+  first_table <- first_table %>%
+    rename(., home_team = home_position, home_position = home_team)
+}
+first_table <- first_table[, c("day", "home_team", "home_position", "home_score", "away_score", "away_team", "away_position")]
+first_table$home_position <- parse_number(first_table$home_position)
+ first_table$away_position <- parse_number(first_table$away_position)
+ first_table <- first_table %>%
+   mutate(home_team = str_trim(home_team, "both"), away_team = str_trim(away_team, "both"), home_score = as.numeric(home_score), away_score = as.numeric(away_score), day = str_trim(day, "both")) %>%
+   mutate(., day = as.Date(day, "%m/%d/%y")) %>%
+   rename(., date = day)
+return(first_table)
+}
+```
+
+```{r}
+finished_table <- function(tables){
+  full_table <- data.frame(matrix(nrow = 0, ncol = 7))
+  for (x in 1:length(tables)){
+    temp_table <- tables[[x]]
+    full_table <- rbind(full_table, organize_table(temp_table))
+  }
+  return(full_table)
+}
+```
+
+```{r warning=FALSE}
+full_table <- finished_table(tables)
+```
+
+
+
+
+
+
+
+
+
+

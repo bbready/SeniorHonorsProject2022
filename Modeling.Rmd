@@ -1,0 +1,282 @@
+---
+title: "Modeling"
+author: "Brenden Bready"
+date: "3/31/2022"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+data <- read_csv("data.csv", show_col_types = FALSE)
+```
+
+```{r}
+data <- data %>%
+        rename(team = home_team, opponent = away_team, team_score = home_score, opp_score = away_score) %>%
+        select(-c(home_position, away_position))
+data2 <- data %>%
+        rename(team = opponent, opponent = team, team_score = opp_score, opp_score = team_score)
+double_table <- bind_rows(data, data2)
+```
+
+put in home indicator (first half 1, second half 0) in double table
+
+for overall ratings, offensive / defensive
+
+eventually get to win loss tie to get expected points
+
+```{r}
+double_table <- doubleTableFunc(data)
+```
+
+
+```{r}
+mod1 <- glm(team_score ~ team + opponent + Location, data = double_table, family = poisson)
+summary(mod1)
+```
+
+```{r}
+exp(0.36-0.16+.25)
+exp(0.36-0.38+.16)
+```
+
+```{r}
+mod1$coefficients
+```
+
+```{r}
+hockey <- read_csv("ECACresults.csv")
+```
+
+```{r}
+hockeyMod <- glm(team_score ~ team + opponent + Location, data = hockey, family = poisson)
+summary(hockeyMod)
+```
+
+```{r}
+original <- data.frame(x = mod1$coefficients, rating = exp(mod1$coefficients))
+original$team <- rownames(original)
+row.names(original) <- NULL
+original <- original %>%
+  select(team, x, rating)
+```
+
+
+```{r}
+defAVG <- (original %>%
+  filter(str_detect(team, "opponent") == TRUE) %>%
+  summarise(sum(x)/(n()+1)))[1,1]
+offAVG <- (original %>%
+  filter(str_detect(team, "team") == TRUE) %>%
+  summarise(sum(x)/(n()+1)))[1,1]
+intercept <- (original$x)[1]
+```
+
+
+```{r}
+adjusted <- data.frame(team = unique(double_table$team))
+adjusted <- data.frame(team = adjusted[order(adjusted$team),])
+adjusted$Off = append(0, original$x[2:(length(original$x)/2)])
+adjusted$Def = append(0, original$x[(length(original$x)/2+1):(length(original$x)-1)])
+```
+
+```{r}
+adjusted$OffAdj = adjusted$Off+defAVG+intercept
+adjusted$DefAdj = adjusted$Def+offAVG+intercept
+adjusted$expOff = exp(adjusted$Off+defAVG+intercept)
+adjusted$expDef = exp(adjusted$Def+offAVG+intercept)
+```
+
+```{r}
+avgPoisOffCoef <- mean(adjusted$OffAdj)
+avgPoisDefCoef <- mean(adjusted$DefAdj)
+avgPoisCoef <- exp((avgPoisDefCoef+avgPoisOffCoef)/2)
+```
+
+```{r}
+mean(adjusted$expOff)
+mean(adjusted$expDef)
+```
+
+
+
+```{r}
+scoreRate <- mean(double_table$team_score)
+```
+
+
+
+
+```{r}
+# To get our C value
+C = scoreRate/avgPoisCoef
+```
+
+```{r}
+poissonOFFavg = mean(adjusted$expOff)
+poissonDEFavg = mean(adjusted$expDef)
+```
+
+
+```{r}
+# To get D value
+D = sqrt(C*(poissonDEFavg/poissonOFFavg))
+```
+
+
+```{r}
+adjusted$newOffExp = adjusted$expOff*D 
+adjusted$newDefExp = adjusted$expDef*(C/D)
+```
+
+```{r}
+mean(adjusted$newOffExp)
+mean(adjusted$newDefExp)
+```
+
+
+```{r}
+poissonFunc <- function(games){
+  model <- glm(team_score ~ team + opponent + Location, data = games, family = poisson)
+  original <- data.frame(x = model$coefficients, rating = exp(model$coefficients))
+  original$team <- rownames(original)
+  row.names(original) <- NULL
+  original <- original %>%
+    select(team, x, rating)
+  defAVG <- (original %>%
+    filter(str_detect(team, "opponent") == TRUE) %>%
+    summarise(sum(x)/(n()+1)))[1,1]
+  offAVG <- (original %>%
+    filter(str_detect(team, "team") == TRUE) %>%
+    summarise(sum(x)/(n()+1)))[1,1]
+  intercept <- (original$x)[1]
+  homeAdj <- original$rating[length(original$rating)]
+  adjusted <- data.frame(team = unique(games$team))
+  adjusted <- data.frame(team = adjusted[order(adjusted$team),])
+  adjusted$Off = append(0, original$x[2:(length(original$x)/2)])
+  adjusted$Def = append(0, original$x[(length(original$x)/2+1):(length(original$x)-1)])
+  adjusted$OffAdj = adjusted$Off+defAVG+intercept
+  adjusted$DefAdj = adjusted$Def+offAVG+intercept
+  adjusted$expOff = exp(adjusted$Off+defAVG+intercept)
+  adjusted$expDef = exp(adjusted$Def+offAVG+intercept)
+  avgPoisOffCoef <- mean(adjusted$OffAdj)
+  avgPoisDefCoef <- mean(adjusted$DefAdj)
+  avgPoisCoef <- exp((avgPoisDefCoef+avgPoisOffCoef)/2)
+  scoreRate <- mean(games$team_score)
+  C = scoreRate/avgPoisCoef
+  poissonOFFavg = mean(adjusted$expOff)
+  poissonDEFavg = mean(adjusted$expDef)
+  D = sqrt(C*(poissonDEFavg/poissonOFFavg))
+  adjusted$newOffExp = adjusted$expOff*D 
+  adjusted$newDefExp = adjusted$expDef*(C/D)
+  returnedTable <- adjusted %>%
+    mutate(OffRating = newOffExp, DefRating = newDefExp, OverallRating = newOffExp/newDefExp) %>%
+    select(team, OffRating, DefRating, OverallRating) %>%
+    arrange(desc(OffRating))
+  returnedTable$OffRank = 1:nrow(returnedTable)
+  returnedTable <- returnedTable %>%
+    arrange(DefRating)
+  returnedTable$DefRank = 1:nrow(returnedTable)
+  returnedTable <- returnedTable %>%
+    arrange(desc(OverallRating)) %>%
+    mutate_if(is.numeric, round, digits=2) %>%
+    select(team, OverallRating, OffRating, OffRank, DefRating, DefRank)
+  return(list(returnedTable, homeAdj))
+}
+```
+
+
+```{r}
+poissonFunc(doubleTableFunc(data))[[2]]
+```
+
+
+
+```{r}
+poissonFunc(hockey)
+```
+
+
+
+```{r}
+doubleTableFunc <- function(games){
+    data <- games %>%
+        filter(!is.na(home_score & away_score))
+    data <- data %>%
+        rename(team = home_team, opponent = away_team, team_score = home_score, opp_score = away_score) %>%
+        select(-c(home_position, away_position))
+    data2 <- data %>%
+        rename(team = opponent, opponent = team, team_score = opp_score, opp_score = team_score)
+    double_table <- bind_rows(data, data2)
+    double_table$Location = NA
+    double_table$Location[0:length(double_table$date)/2] = 1
+    double_table[is.na(double_table)] = -1
+    return(double_table)
+}
+```
+
+```{r}
+dput(unique(poisson$team))
+poisson <- poissonFunc(doubleTableFunc(data))
+```
+
+```{r}
+poisson %>% 
+  mutate(team = fct_reorder(team, (OverallRating))) %>%
+  ggplot(aes(x = OverallRating, y = team)) + 
+  geom_col(aes(fill = team)) +
+  theme_bw() +
+  xlab("Overall Rating") + 
+  ylab("Team")
+```
+
+```{r}
+rpi <- rpi((data))
+rpi %>% 
+  mutate(Team = fct_reorder(Team, (RPI))) %>%
+  ggplot(aes(x = RPI, y = Team)) + 
+  geom_col(aes(fill = Team)) +
+  theme_bw(plot.title("RPI")) +
+  xlab("RPI") + 
+  ylab("Team")
+```
+
+
+Offensive Rating
+Defensive Rating
+Off / Def
+Sort by overall rating
+round decimals
+add rank for offense and defense
+record in standings function?
+rating, offense, off rank, defense, def rank
+draft of poster
+
+```{r}
+bb <- read_csv("BBstats.csv")
+poissonFunc(doubleTableFunc(bb))
+```
+
+```{r}
+rpi(bb)
+```
+
+
+
+
+international
+football
+ratings
+prediction
+
+
+
+
+
+
+
+
+
